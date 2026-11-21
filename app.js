@@ -50,18 +50,26 @@ const MODELS = ['onnx-community/whisper-tiny', 'onnx-community/whisper-base', 'o
 let model = lsGet('koelog.model', DEFAULT_MODEL);
 if (!MODELS.includes(model)) model = DEFAULT_MODEL;
 function lsJson(k, d) { try { const v = JSON.parse(lsGet(k, '')); return v && typeof v === 'object' ? v : d; } catch (_) { return d; } }
-const loadedModels = () => { const a = lsJson('koelog.loaded', []); return Array.isArray(a) ? a.filter((m) => MODELS.includes(m)) : []; };
+const loadedModels = () => { const a = lsJson('koelog.loaded.v2', []); return Array.isArray(a) ? a.filter((m) => MODELS.includes(m)) : []; };
 // 機種ごとに動いた計算方式を覚えておく
 const variantFor = (m) => (lsJson('koelog.variant', {})[m] === 1 ? 1 : 0);
 function saveVariant(m, v) { const o = lsJson('koelog.variant', {}); o[m] = v === 1 ? 1 : 0; lsSet('koelog.variant', JSON.stringify(o)); }
-function markLoaded(m) { const a = loadedModels(); if (!a.includes(m)) { a.push(m); lsSet('koelog.loaded', JSON.stringify(a)); } }
+function markLoaded(m) { const a = loadedModels(); if (!a.includes(m)) { a.push(m); lsSet('koelog.loaded.v2', JSON.stringify(a)); } }
 
 // ---------- 文字起こしAI（Web Worker） ----------
-const APP_VERSION = 7;
-const worker = new Worker('worker.js?v=' + APP_VERSION, { type: 'module' });
+const APP_VERSION = 8;
+// 複数スレッドで計算が壊れる機種では、1スレッドに切り替えて覚えておく
+let singleThread = lsGet('koelog.single', '') === '1';
+let worker = null;
+function createWorker() {
+  if (worker) worker.terminate();
+  worker = new Worker(`worker.js?v=${APP_VERSION}${singleThread ? '&t=1' : ''}`, { type: 'module' });
+  worker.onerror = onWorkerError;
+  worker.onmessage = onWorkerMessage;
+}
 let ai = { state: 'none', model: null, device: null, error: '' };
 const fileProgress = new Map();
-const jobs = new Map(); // jobId -> { rec, idx, rms }
+const jobs = new Map(); // jobId -> { rec, idx, rms, audio }
 let jobSeq = 0;
 
 function ensureModel() {
@@ -72,15 +80,15 @@ function ensureModel() {
   renderAi();
 }
 
-worker.onerror = (e) => {
+function onWorkerError(e) {
   // 更新の途中で古い部品が残っていた場合は、1回だけ自動で読み込み直す
   let retried = true;
   try { retried = sessionStorage.getItem('koelog.retry') === String(APP_VERSION); sessionStorage.setItem('koelog.retry', String(APP_VERSION)); } catch (_) { /* 保存できない環境 */ }
   if (!retried && !session) { location.reload(); return; }
   ai = { state: 'error', model, device: null, error: (e && e.message) || 'AIの部品を読み込めませんでした' };
   renderAi();
-};
-worker.onmessage = (e) => {
+}
+function onWorkerMessage(e) {
   const m = e.data;
   if (m.type === 'progress') {
     if (m.file && m.total) fileProgress.set(m.file, { loaded: m.loaded || 0, total: m.total });
@@ -89,7 +97,7 @@ worker.onmessage = (e) => {
     }
     renderAi();
   } else if (m.type === 'ready') {
-    ai = { state: 'ready', model: m.model, device: m.device, threads: m.threads, error: '' };
+    ai = { state: 'ready', model: m.model, device: m.device, threads: m.threads, variant: m.variant, error: '' };
     markLoaded(m.model);
     if (m.device === 'wasm') saveVariant(m.model, m.variant);
     // ブラウザが容量不足のときに保存データ（録音・AI）を勝手に消さないよう依頼する
@@ -106,12 +114,29 @@ worker.onmessage = (e) => {
   } else if (m.type === 'result') {
     onResult(m);
   }
-};
+}
+createWorker();
+
+// 1スレッドに切り替えて、まだ終わっていない区間をすべてやり直す
+function fallbackToSingleThread() {
+  singleThread = true;
+  lsSet('koelog.single', '1');
+  toast('この機種に合う計算方式に切り替えています');
+  createWorker();
+  ai = { state: 'none', model: null, device: null, error: '' };
+  ensureModel();
+  for (const [id, j] of jobs) {
+    const audio = j.audio.slice();
+    worker.postMessage({ type: 'transcribe', id, audio, model, variant: 0 }, [audio.buffer]);
+  }
+}
 
 function onResult({ id, text, error }) {
   const job = jobs.get(id);
   if (!job) return; // 取り消された処理
+  if (error === 'broken' && !singleThread) { fallbackToSingleThread(); return; }
   jobs.delete(id);
+  job.rec.segments[job.idx].error = error ? String(error).slice(0, 200) : undefined;
   const seg = job.rec.segments[job.idx];
   let t = (text || '').trim();
   // 静かな区間で出やすい決まり文句を取り除く
@@ -163,7 +188,7 @@ function enqueue(rec, pcm, sr, start, end) {
   rec.segments.push({ start, end, text: '', status: silent ? 'silent' : 'pending' });
   if (!silent) {
     const id = ++jobSeq;
-    jobs.set(id, { rec, idx, rms: level });
+    jobs.set(id, { rec, idx, rms: level, audio: audio.slice() });
     ensureModel();
     worker.postMessage({ type: 'transcribe', id, audio, model, variant: variantFor(model) }, [audio.buffer]);
   }
@@ -312,13 +337,17 @@ function fmt(sec) { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec
 function fmtDate(t) { const d = new Date(t); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
+function errorText(err) {
+  if (err === 'broken') return 'AIの計算結果が壊れていました';
+  return err;
+}
 function segNodes(rec, showSilent = false) {
   const slow = model.includes('small');
   return rec.segments.filter((g) => showSilent || g.status !== 'silent').map((g) => {
     const box = el('div', 'seg ' + g.status);
     box.append(el('span', 'ts', fmt(g.start)));
     const body = g.status === 'pending' ? (slow ? '文字起こし中…（高精度は時間がかかります）' : '文字起こし中…')
-      : g.status === 'failed' ? '（文字起こしできませんでした。「もう一度文字起こし」を試してください）'
+      : g.status === 'failed' ? `（文字起こしできませんでした。「もう一度文字起こし」を試してください）${g.error ? '\n理由：' + errorText(g.error) : ''}`
       : g.status === 'silent' ? '（声を聞き取れませんでした）' : g.text;
     box.append(el('span', 'body', body));
     return box;
@@ -443,7 +472,7 @@ function renderAi() {
   }
   $('#app-version').textContent = `こえログ バージョン ${APP_VERSION}`;
   $('#device-info').textContent = ai.state === 'ready'
-    ? `現在の処理方式：${ai.device === 'webgpu' ? 'WebGPU（速い）' : `WASM（CPU・${ai.threads || 1}スレッド）`}` : '';
+    ? `現在の処理方式：${ai.device === 'webgpu' ? 'WebGPU（速い）' : `WASM（CPU・${ai.threads || 1}スレッド・${ai.variant === 1 ? '4bit' : '8bit'}）`}` : '';
   if (session) renderLive();
 }
 

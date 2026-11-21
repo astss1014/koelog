@@ -54,7 +54,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid 
 canvas.wave{width:100%;height:56px;display:block}
 .rec-note{font-size:11px;color:var(--muted);margin:6px 0 0}
 .live{flex:1;min-height:160px;max-height:45dvh;overflow:auto;margin-top:10px;padding:12px;border-radius:16px;background:var(--tx-soft);font-size:14px;display:flex;flex-direction:column;gap:10px}
-.seg{display:flex;flex-direction:column;min-width:0;overflow-wrap:anywhere}
+.seg{display:flex;flex-direction:column;white-space:pre-line;min-width:0;overflow-wrap:anywhere}
 .seg .ts{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
 .seg.pending .body{color:var(--tx);font-size:12px}
 .seg.silent .body{color:var(--muted);font-size:12px}

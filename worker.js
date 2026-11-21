@@ -13,7 +13,8 @@ const REVISIONS = {
   'onnx-community/whisper-small': '36050c46d777d46dc4b5f43f6d90574fc38f8732',
 };
 // クロスオリジン分離されていれば、CPUの複数の計算ラインを使って速くする
-const threads = self.crossOriginIsolated
+const single = new URL(self.location.href).searchParams.get('t') === '1';
+const threads = self.crossOriginIsolated && !single
   ? Math.max(1, Math.min(4, (self.navigator.hardwareConcurrency || 4) - 1))
   : 1;
 env.backends.onnx.wasm.numThreads = threads;
