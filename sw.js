@@ -1,5 +1,5 @@
 // アプリ本体と、文字起こしの部品（CDN）を保存してオフラインでも開けるようにする
-const CACHE_NAME = 'koelog-v3';
+const CACHE_NAME = 'koelog-v4';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './worker.js', './recorder-worklet.js', './manifest.json', './icon.svg'];
 
 // 複数スレッドでの処理に必要な「クロスオリジン分離」の設定を付ける

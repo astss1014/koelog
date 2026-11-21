@@ -57,7 +57,7 @@ canvas.wave{width:100%;height:56px;display:block}
 .seg{display:flex;flex-direction:column}
 .seg .ts{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
 .seg.pending .body{color:var(--tx);font-size:12px}
-.seg.silent{display:none}
+.seg.silent .body{color:var(--muted);font-size:12px}
 .controls{display:flex;justify-content:center;align-items:flex-start;gap:36px;margin-top:18px}
 .ctl-wrap{display:flex;flex-direction:column;align-items:center;gap:4px}
 .ctl{width:60px;height:60px;border-radius:50%;border:1px solid var(--line);background:var(--bg);cursor:pointer;display:grid;place-items:center}

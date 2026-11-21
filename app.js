@@ -14,10 +14,9 @@ if ('serviceWorker' in navigator) {
 }
 // 区切り方 [区切りを探し始める秒数, 必ず区切る秒数]
 // 録音中は処理が追いついている間は短く区切って早く文字を出し、遅れてきたら長めに区切って負担を減らす
-const SEG_FAST = [5, 9];
+const SEG_FAST = [8, 12];
 const SEG_SLOW = [18, 25];
 const SEG_FILE = [18, 25]; // 録音済みの音声をまとめて文字起こしするとき
-const SILENCE_RMS = 0.004;
 const DEFAULT_MODEL = 'onnx-community/whisper-base';
 
 // ---------- 保存（このブラウザの IndexedDB にだけ保存） ----------
@@ -105,6 +104,16 @@ function onResult({ id, text, error }) {
 }
 
 // ---------- 音声処理 ----------
+// 0.1秒ごとに音の大きさを見て、声らしい音が合計0.3秒以上あれば「声あり」とする
+// （区間全体の平均で判定すると、静かな時間が長い区間の小さな声を取りこぼすため）
+function hasVoice(a) {
+  const w = 1600; let loud = 0;
+  for (let s = 0; s + w <= a.length; s += w) {
+    let e = 0; for (let i = s; i < s + w; i++) e += a[i] * a[i];
+    if (Math.sqrt(e / w) > 0.002 && ++loud >= 3) return true;
+  }
+  return false;
+}
 function rms(a) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * a[i]; return Math.sqrt(s / (a.length || 1)); }
 function resample(a, from) {
   if (from === 16000) return a.slice();
@@ -131,7 +140,7 @@ function enqueue(rec, pcm, sr, start, end) {
   const idx = rec.segments.length;
   const audio = resample(pcm, sr);
   const level = rms(audio);
-  const silent = level < SILENCE_RMS || audio.length < 8000;
+  const silent = audio.length < 8000 || !hasVoice(audio);
   rec.segments.push({ start, end, text: '', status: silent ? 'silent' : 'pending' });
   if (!silent) {
     const id = ++jobSeq;
@@ -176,7 +185,8 @@ async function startRec() {
   let ctx = new AudioContext({ sampleRate: 16000 });
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    // 通話向けの雑音除去・エコー除去は、離れた人の声まで消してしまうことがあるので切る
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
   } catch (_) {
     ctx.close();
     toast('マイクを使えません。ブラウザの設定でマイクを許可してください');
@@ -283,11 +293,14 @@ function fmt(sec) { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec
 function fmtDate(t) { const d = new Date(t); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
-function segNodes(rec) {
-  return rec.segments.filter((g) => g.status !== 'silent').map((g) => {
+function segNodes(rec, showSilent = false) {
+  const slow = model.includes('small');
+  return rec.segments.filter((g) => showSilent || g.status !== 'silent').map((g) => {
     const box = el('div', 'seg ' + g.status);
     box.append(el('span', 'ts', fmt(g.start)));
-    const body = g.status === 'pending' ? '文字起こし中…' : g.status === 'failed' ? '（文字起こしできませんでした）' : g.text;
+    const body = g.status === 'pending' ? (slow ? '文字起こし中…（高精度は時間がかかります）' : '文字起こし中…')
+      : g.status === 'failed' ? '（文字起こしできませんでした）'
+      : g.status === 'silent' ? '（声を聞き取れませんでした）' : g.text;
     box.append(el('span', 'body', body));
     return box;
   });
@@ -295,7 +308,7 @@ function segNodes(rec) {
 function renderLive() {
   if (!session) return;
   const live = $('#live');
-  const nodes = segNodes(session.rec);
+  const nodes = segNodes(session.rec, true);
   nodes.push(el('div', 'seg pending'));
   nodes[nodes.length - 1].append(el('span', 'body', ai.state === 'loading' ? 'AIを準備しています…（録音は続いています）' : '聞き取り中…'));
   live.replaceChildren(...nodes);
