@@ -51,6 +51,10 @@ function ensureModel() {
   renderAi();
 }
 
+worker.onerror = (e) => {
+  ai = { state: 'error', model, device: null, error: (e && e.message) || 'AIの部品を読み込めませんでした' };
+  renderAi();
+};
 worker.onmessage = (e) => {
   const m = e.data;
   if (m.type === 'progress') {

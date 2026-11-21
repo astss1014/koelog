@@ -1,5 +1,5 @@
 // アプリ本体と、文字起こしの部品（CDN）を保存してオフラインでも開けるようにする
-const CACHE_NAME = 'koelog-v1';
+const CACHE_NAME = 'koelog-v2';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './worker.js', './recorder-worklet.js', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', (event) => {
