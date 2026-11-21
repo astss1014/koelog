@@ -48,6 +48,9 @@ function lsGet(k, d) { try { return localStorage.getItem(k) ?? d; } catch (_) { 
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) { /* 保存できない環境 */ } }
 let model = lsGet('koelog.model', DEFAULT_MODEL);
 const loadedModels = () => JSON.parse(lsGet('koelog.loaded', '[]'));
+// 機種ごとに動いた計算方式を覚えておく
+const variantFor = (m) => Number(JSON.parse(lsGet('koelog.variant', '{}'))[m] || 0);
+function saveVariant(m, v) { const o = JSON.parse(lsGet('koelog.variant', '{}')); o[m] = v; lsSet('koelog.variant', JSON.stringify(o)); }
 function markLoaded(m) { const a = loadedModels(); if (!a.includes(m)) { a.push(m); lsSet('koelog.loaded', JSON.stringify(a)); } }
 
 // ---------- 文字起こしAI（Web Worker） ----------
@@ -61,7 +64,7 @@ function ensureModel() {
   if ((ai.state === 'ready' || ai.state === 'loading') && ai.model === model) return;
   ai = { state: 'loading', model, device: null, error: '' };
   fileProgress.clear();
-  worker.postMessage({ type: 'load', model });
+  worker.postMessage({ type: 'load', model, variant: variantFor(model) });
   renderAi();
 }
 
@@ -80,9 +83,15 @@ worker.onmessage = (e) => {
   } else if (m.type === 'ready') {
     ai = { state: 'ready', model: m.model, device: m.device, threads: m.threads, error: '' };
     markLoaded(m.model);
+    if (m.device === 'wasm') saveVariant(m.model, m.variant);
     renderAi();
   } else if (m.type === 'error') {
     ai = { state: 'error', model, device: null, error: m.message };
+    renderAi();
+  } else if (m.type === 'switching') {
+    ai = { state: 'loading', model, device: null, error: '' };
+    fileProgress.clear();
+    toast('この機種に合う計算方式に切り替えています');
     renderAi();
   } else if (m.type === 'result') {
     onResult(m);
@@ -146,7 +155,7 @@ function enqueue(rec, pcm, sr, start, end) {
     const id = ++jobSeq;
     jobs.set(id, { rec, idx, rms: level });
     ensureModel();
-    worker.postMessage({ type: 'transcribe', id, audio, model }, [audio.buffer]);
+    worker.postMessage({ type: 'transcribe', id, audio, model, variant: variantFor(model) }, [audio.buffer]);
   }
 }
 // 長い音声を、言葉の切れ目で区切りながら順番に文字起こしへ回す
@@ -299,7 +308,7 @@ function segNodes(rec, showSilent = false) {
     const box = el('div', 'seg ' + g.status);
     box.append(el('span', 'ts', fmt(g.start)));
     const body = g.status === 'pending' ? (slow ? '文字起こし中…（高精度は時間がかかります）' : '文字起こし中…')
-      : g.status === 'failed' ? '（文字起こしできませんでした）'
+      : g.status === 'failed' ? '（文字起こしできませんでした。「もう一度文字起こし」を試してください）'
       : g.status === 'silent' ? '（声を聞き取れませんでした）' : g.text;
     box.append(el('span', 'body', body));
     return box;
