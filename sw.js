@@ -1,5 +1,6 @@
 // アプリ本体と文字起こしの部品を保存して、オフラインでも開けるようにする
-const CACHE_NAME = 'koelog-v6';
+const VERSION = 7;
+const CACHE_NAME = 'koelog-v' + VERSION;
 const ASSETS = ['./', './index.html', './style.css', './app.js', './worker.js', './recorder-worklet.js', './manifest.json', './icon.svg',
   './vendor/transformers.min.js', './vendor/ort-wasm-simd-threaded.jsep.mjs', './vendor/ort-wasm-simd-threaded.jsep.wasm'];
 // 画面と同じセキュリティ設定を、文字起こし担当（Worker）にも付ける
@@ -45,8 +46,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   // 本体は新しい版を優先し、通信できないときは保存分を使う
+  // （ブラウザの一時保存に残った古いファイルと新しいファイルが混ざらないよう、毎回サーバーに確認する）
   event.respondWith(
-    fetch(req).then((res) => {
+    fetch(req, { cache: 'no-cache' }).then((res) => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE_NAME).then((c) => c.put(req, copy)); }
       return isolate(res);
     }).catch(() => caches.match(req).then((hit) => (hit ? isolate(hit) : Response.error())))

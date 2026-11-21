@@ -4,7 +4,7 @@ const $ = (s) => document.querySelector(s);
 // 複数の計算ライン（スレッド）で処理するには「クロスオリジン分離」が必要。
 // GitHub Pages では設定できないため Service Worker が必要な設定を付け、初回だけ自動で再読み込みする。
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').then(async () => {
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(async () => {
     if (window.crossOriginIsolated) return;
     await navigator.serviceWorker.ready;
     let tried = true;
@@ -57,7 +57,8 @@ function saveVariant(m, v) { const o = lsJson('koelog.variant', {}); o[m] = v ==
 function markLoaded(m) { const a = loadedModels(); if (!a.includes(m)) { a.push(m); lsSet('koelog.loaded', JSON.stringify(a)); } }
 
 // ---------- 文字起こしAI（Web Worker） ----------
-const worker = new Worker('worker.js', { type: 'module' });
+const APP_VERSION = 7;
+const worker = new Worker('worker.js?v=' + APP_VERSION, { type: 'module' });
 let ai = { state: 'none', model: null, device: null, error: '' };
 const fileProgress = new Map();
 const jobs = new Map(); // jobId -> { rec, idx, rms }
@@ -72,6 +73,10 @@ function ensureModel() {
 }
 
 worker.onerror = (e) => {
+  // 更新の途中で古い部品が残っていた場合は、1回だけ自動で読み込み直す
+  let retried = true;
+  try { retried = sessionStorage.getItem('koelog.retry') === String(APP_VERSION); sessionStorage.setItem('koelog.retry', String(APP_VERSION)); } catch (_) { /* 保存できない環境 */ }
+  if (!retried && !session) { location.reload(); return; }
   ai = { state: 'error', model, device: null, error: (e && e.message) || 'AIの部品を読み込めませんでした' };
   renderAi();
 };
@@ -436,6 +441,7 @@ function renderAi() {
     sub.textContent = '最初の1回だけAIをダウンロードします（Wi-Fi推奨）。録音した音声はスマホの外に送られません。';
     btn.textContent = 'ダウンロード';
   }
+  $('#app-version').textContent = `こえログ バージョン ${APP_VERSION}`;
   $('#device-info').textContent = ai.state === 'ready'
     ? `現在の処理方式：${ai.device === 'webgpu' ? 'WebGPU（速い）' : `WASM（CPU・${ai.threads || 1}スレッド）`}` : '';
   if (session) renderLive();
