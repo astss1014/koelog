@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co; media-src 'self' blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'">
+<meta name="theme-color" content="#16202A">
+<meta name="description" content="ワンタッチで会話を録音し、スマホの中だけで文字起こしするアプリ。">
+<title>こえログ</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ホーム -->
+  <section class="view" id="v-home">
+    <header class="top">
+      <h1 class="app-name">こえログ</h1>
+      <button class="icon-btn" id="btn-settings" type="button" aria-label="設定">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>
+      </button>
+    </header>
+
+    <div class="ai-card" id="ai-card">
+      <div class="ai-text">
+        <b id="ai-title">文字起こしAIの準備</b>
+        <span id="ai-sub">最初の1回だけAIをダウンロードします。録音した音声はスマホの外に送られません。</span>
+      </div>
+      <div class="progress" id="ai-progress" hidden><i id="ai-bar"></i></div>
+      <button class="btn primary" id="btn-load" type="button">ダウンロード</button>
+    </div>
+
+    <div class="hero-rec">
+      <button class="rec-btn" id="btn-rec" type="button" aria-label="録音を開始"><span class="dot"></span></button>
+      <div class="hint">タップで録音スタート</div>
+      <div class="sub">日本語 · スマホの中で文字起こし</div>
+    </div>
+
+    <div class="section-label">録音一覧</div>
+    <div class="list" id="list"></div>
+    <p class="empty" id="empty">まだ録音がありません。赤いボタンを押すと録音が始まります。</p>
+  </section>
+
+  <!-- 録音中 -->
+  <section class="view" id="v-rec" hidden>
+    <div class="rec-head" id="rec-head"><span class="blink"></span><span id="rec-state">録音中</span></div>
+    <div class="timer" id="timer">00:00</div>
+    <canvas class="wave" id="wave" width="600" height="112" aria-hidden="true"></canvas>
+    <p class="rec-note">画面を消すと録音が止まることがあります。録音中は画面をつけたままにしてください。</p>
+    <div class="live" id="live" aria-live="polite"></div>
+    <div class="controls">
+      <div class="ctl-wrap"><button class="ctl" id="btn-pause" type="button" aria-label="一時停止">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+      </button><span class="ctl-label" id="pause-label">一時停止</span></div>
+      <div class="ctl-wrap"><button class="ctl stop" id="btn-stop" type="button" aria-label="録音を終了"><span></span></button><span class="ctl-label">終了</span></div>
+    </div>
+  </section>
+
+  <!-- 詳細 -->
+  <section class="view" id="v-detail" hidden>
+    <button class="back" id="btn-back" type="button">‹ 一覧へ</button>
+    <input class="title-input" id="d-title" type="text" maxlength="60" aria-label="タイトル">
+    <div class="meta" id="d-meta"></div>
+    <audio id="d-audio" controls preload="metadata"></audio>
+    <div class="d-status" id="d-status" hidden></div>
+    <div class="doc" id="d-text"></div>
+    <div class="actions">
+      <button class="btn" id="btn-copy" type="button">コピー</button>
+      <button class="btn" id="btn-share" type="button">共有</button>
+      <button class="btn primary" id="btn-export" type="button">テキスト保存</button>
+    </div>
+    <div class="actions sub-actions">
+      <button class="btn ghost" id="btn-redo" type="button">もう一度文字起こし</button>
+      <button class="btn ghost danger" id="btn-delete" type="button">削除</button>
+    </div>
+  </section>
+
+  <!-- 設定 -->
+  <section class="view" id="v-settings" hidden>
+    <button class="back" id="btn-back2" type="button">‹ 戻る</button>
+    <h2>設定</h2>
+    <label class="field" for="model">文字起こしAIの種類
+      <select id="model">
+        <option value="onnx-community/whisper-tiny">軽量（速い・精度は低め／約40MB）</option>
+        <option value="onnx-community/whisper-base">標準（おすすめ／約80〜150MB）</option>
+        <option value="onnx-community/whisper-small">高精度（重い・新しいスマホ向け／約250〜600MB）</option>
+      </select>
+    </label>
+    <p class="help">種類を変えると、次の文字起こしの前にそのAIをダウンロードします。サイズは目安です。Wi-Fiでのダウンロードをおすすめします。</p>
+    <div class="info" id="device-info"></div>
+    <h3>プライバシー</h3>
+    <p class="help">録音した音声と文字起こしの結果は、このスマホのブラウザの中にだけ保存されます。インターネットを使うのは、アプリ本体とAIのファイルを最初にダウンロードするときだけです。ブラウザの「サイトデータを削除」をすると録音も消えるので、残したいものは「テキスト保存」で書き出してください。</p>
+  </section>
+
+  <div class="toast" id="toast" role="status"></div>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
