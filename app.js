@@ -1,7 +1,22 @@
 // こえログ：ワンタッチ録音＋スマホ内での文字起こし
 const $ = (s) => document.querySelector(s);
-const SEG_MIN = 12;   // 区切りを探し始める秒数
-const SEG_MAX = 20;   // これ以上たまったら必ず区切る秒数
+
+// 複数の計算ライン（スレッド）で処理するには「クロスオリジン分離」が必要。
+// GitHub Pages では設定できないため Service Worker が必要な設定を付け、初回だけ自動で再読み込みする。
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(async () => {
+    if (window.crossOriginIsolated) return;
+    await navigator.serviceWorker.ready;
+    let tried = true;
+    try { tried = sessionStorage.getItem('koelog.coi') === '1'; sessionStorage.setItem('koelog.coi', '1'); } catch (_) { /* 保存できない環境では再読み込みしない */ }
+    if (!tried && !session) location.reload();
+  }).catch(() => {});
+}
+// 区切り方 [区切りを探し始める秒数, 必ず区切る秒数]
+// 録音中は処理が追いついている間は短く区切って早く文字を出し、遅れてきたら長めに区切って負担を減らす
+const SEG_FAST = [5, 9];
+const SEG_SLOW = [18, 25];
+const SEG_FILE = [18, 25]; // 録音済みの音声をまとめて文字起こしするとき
 const SILENCE_RMS = 0.004;
 const DEFAULT_MODEL = 'onnx-community/whisper-base';
 
@@ -64,7 +79,7 @@ worker.onmessage = (e) => {
     }
     renderAi();
   } else if (m.type === 'ready') {
-    ai = { state: 'ready', model: m.model, device: m.device, error: '' };
+    ai = { state: 'ready', model: m.model, device: m.device, threads: m.threads, error: '' };
     markLoaded(m.model);
     renderAi();
   } else if (m.type === 'error') {
@@ -128,8 +143,9 @@ function enqueue(rec, pcm, sr, start, end) {
 // 長い音声を、言葉の切れ目で区切りながら順番に文字起こしへ回す
 function enqueueAll(rec, a, sr, offsetSec) {
   let pos = 0;
-  while (a.length - pos > SEG_MAX * sr) {
-    const cut = quietestPoint(a, sr, pos + SEG_MIN * sr, pos + SEG_MAX * sr);
+  const [lo, hi] = SEG_FILE;
+  while (a.length - pos > hi * sr) {
+    const cut = quietestPoint(a, sr, pos + lo * sr, pos + hi * sr);
     enqueue(rec, a.subarray(pos, cut), sr, offsetSec + pos / sr, offsetSec + cut / sr);
     pos = cut;
   }
@@ -203,18 +219,23 @@ function onPcm(block) {
   s.levels.shift(); s.levels.push(s.paused ? 0 : rms(block));
   if (s.paused) return;
   s.pcm.push(block); s.pcmLen += block.length;
-  if (s.pcmLen >= SEG_MAX * s.sr) cutSegment(false);
+  if (s.pcmLen >= segRange()[1] * s.sr) cutSegment(false);
 }
 function cutSegment(final) {
   const s = session; if (!s || !s.pcmLen) return;
   const all = new Float32Array(s.pcmLen);
   let o = 0; for (const b of s.pcm) { all.set(b, o); o += b.length; }
-  const cut = final ? all.length : quietestPoint(all, s.sr, SEG_MIN * s.sr, SEG_MAX * s.sr);
+  const [lo, hi] = segRange();
+  const cut = final ? all.length : quietestPoint(all, s.sr, lo * s.sr, hi * s.sr);
   const rest = all.slice(cut);
   s.pcm = rest.length ? [rest] : []; s.pcmLen = rest.length;
   const start = s.cut / s.sr; s.cut += cut;
   enqueue(s.rec, all.subarray(0, cut), s.sr, start, s.cut / s.sr);
   renderLive();
+}
+function segRange() {
+  const backlog = [...jobs.values()].filter((j) => session && j.rec === session.rec).length;
+  return backlog >= 2 ? SEG_SLOW : SEG_FAST;
 }
 function elapsed() { const s = session; return s ? (s.cut + s.pcmLen) / s.sr : 0; }
 
@@ -383,7 +404,7 @@ function renderAi() {
     btn.textContent = 'ダウンロード';
   }
   $('#device-info').textContent = ai.state === 'ready'
-    ? `現在の処理方式：${ai.device === 'webgpu' ? 'WebGPU（速い）' : 'WASM（CPU）'}` : '';
+    ? `現在の処理方式：${ai.device === 'webgpu' ? 'WebGPU（速い）' : `WASM（CPU・${ai.threads || 1}スレッド）`}` : '';
   if (session) renderLive();
 }
 
@@ -463,4 +484,3 @@ $('#btn-delete').onclick = async () => {
 renderAi();
 renderList();
 if (loadedModels().includes(model)) ensureModel(); // 以前ダウンロード済みなら保存分から読み込む
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

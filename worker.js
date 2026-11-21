@@ -3,6 +3,11 @@ import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transfo
 
 env.allowLocalModels = false;
 env.useBrowserCache = true; // 一度ダウンロードしたAIはブラウザに保存して再利用
+// クロスオリジン分離されていれば、CPUの複数の計算ラインを使って速くする
+const threads = self.crossOriginIsolated
+  ? Math.max(1, Math.min(4, (self.navigator.hardwareConcurrency || 4) - 1))
+  : 1;
+env.backends.onnx.wasm.numThreads = threads;
 
 let asr = null;
 let currentModel = null;
@@ -45,7 +50,7 @@ function load(model) {
       asr = await pipeline('automatic-speech-recognition', model, options(device));
     }
     currentModel = model;
-    postMessage({ type: 'ready', model, device });
+    postMessage({ type: 'ready', model, device, threads: device === 'wasm' ? threads : 0 });
   })();
   loading = { model, promise };
   promise.catch((e) => {
