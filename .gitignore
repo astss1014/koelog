@@ -1,0 +1,39 @@
+# Windows
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+
+# Office 一時ファイル
+~$*.docx
+~$*.xlsx
+~$*.pptx
+
+# 一般
+*.tmp
+*.log
+*.bak
+
+# 個人設定・機密
+.env
+secrets/
+
+# 環境変数・認証情報（サンプルは除外しない）
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+id_rsa*
+id_ed25519*
+id_ecdsa*
+credentials.json
+service-account*.json
+*.secret
+.npmrc
+.netrc

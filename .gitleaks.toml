@@ -1,0 +1,7 @@
+# 同梱ライブラリ（圧縮済みのプログラム）は誤検知が多いため除外する
+[extend]
+useDefault = true
+
+[allowlist]
+description = "同梱ライブラリを除外"
+paths = ['''^vendor/''']

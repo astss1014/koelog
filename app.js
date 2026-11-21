@@ -46,11 +46,14 @@ function toStored(r) {
 // ---------- 設定 ----------
 function lsGet(k, d) { try { return localStorage.getItem(k) ?? d; } catch (_) { return d; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) { /* 保存できない環境 */ } }
+const MODELS = ['onnx-community/whisper-tiny', 'onnx-community/whisper-base', 'onnx-community/whisper-small'];
 let model = lsGet('koelog.model', DEFAULT_MODEL);
-const loadedModels = () => JSON.parse(lsGet('koelog.loaded', '[]'));
+if (!MODELS.includes(model)) model = DEFAULT_MODEL;
+function lsJson(k, d) { try { const v = JSON.parse(lsGet(k, '')); return v && typeof v === 'object' ? v : d; } catch (_) { return d; } }
+const loadedModels = () => { const a = lsJson('koelog.loaded', []); return Array.isArray(a) ? a.filter((m) => MODELS.includes(m)) : []; };
 // 機種ごとに動いた計算方式を覚えておく
-const variantFor = (m) => Number(JSON.parse(lsGet('koelog.variant', '{}'))[m] || 0);
-function saveVariant(m, v) { const o = JSON.parse(lsGet('koelog.variant', '{}')); o[m] = v; lsSet('koelog.variant', JSON.stringify(o)); }
+const variantFor = (m) => (lsJson('koelog.variant', {})[m] === 1 ? 1 : 0);
+function saveVariant(m, v) { const o = lsJson('koelog.variant', {}); o[m] = v === 1 ? 1 : 0; lsSet('koelog.variant', JSON.stringify(o)); }
 function markLoaded(m) { const a = loadedModels(); if (!a.includes(m)) { a.push(m); lsSet('koelog.loaded', JSON.stringify(a)); } }
 
 // ---------- 文字起こしAI（Web Worker） ----------
@@ -84,6 +87,8 @@ worker.onmessage = (e) => {
     ai = { state: 'ready', model: m.model, device: m.device, threads: m.threads, error: '' };
     markLoaded(m.model);
     if (m.device === 'wasm') saveVariant(m.model, m.variant);
+    // ブラウザが容量不足のときに保存データ（録音・AI）を勝手に消さないよう依頼する
+    navigator.storage?.persist?.().catch(() => {});
     renderAi();
   } else if (m.type === 'error') {
     ai = { state: 'error', model, device: null, error: m.message };
@@ -408,7 +413,13 @@ function renderAi() {
   card.classList.toggle('ready', ai.state === 'ready');
   prog.hidden = ai.state !== 'loading';
   btn.hidden = ai.state === 'loading' || ai.state === 'ready';
-  if (ai.state === 'loading') {
+  const cached = loadedModels().includes(ai.model || model);
+  if (ai.state === 'loading' && cached) {
+    // 保存済みのAIを読み込むだけなので、ダウンロードの表示は出さない
+    card.classList.add('ready');
+    prog.hidden = true;
+    title.textContent = '文字起こしAIを読み込み中…';
+  } else if (ai.state === 'loading') {
     let l = 0, t = 0; for (const f of fileProgress.values()) { l += f.loaded; t += f.total; }
     const pct = t ? Math.min(100, Math.round((l / t) * 100)) : 0;
     title.textContent = `文字起こしAIを準備中… ${pct}%`;
@@ -466,6 +477,7 @@ $('#btn-settings').onclick = () => { $('#model').value = model; renderAi(); show
 $('#btn-back').onclick = () => { show('home'); renderList(); };
 $('#btn-back2').onclick = () => show('home');
 $('#model').onchange = (e) => {
+  if (!MODELS.includes(e.target.value)) return;
   model = e.target.value; lsSet('koelog.model', model);
   if (loadedModels().includes(model)) ensureModel();
   else { ai = { state: 'none', model: null, device: null, error: '' }; renderAi(); }

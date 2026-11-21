@@ -1,0 +1,76 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # 毎週月曜 9:00 (JST) に定期スキャン
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+
+# 既定ではすべて読み取り専用。必要なジョブだけ個別に権限を付与する
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secret-scan:
+    name: 秘密情報スキャン (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  codeql:
+    name: コード解析 (CodeQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript, actions
+          queries: security-extended
+          # 同梱している外部ライブラリ（vendor/）は解析対象から外す
+          config: |
+            paths-ignore:
+              - vendor
+      # このリポジトリでは GitHub の Code scanning が使えないため、
+      # 結果はアップロードせず、このジョブ内で判定する
+      - uses: github/codeql-action/analyze@v3
+        with:
+          upload: never
+          output: sarif-results
+      - name: 検出結果の確認
+        run: |
+          # すべての検出をアノテーションとして表示し、重大度 error があれば失敗にする
+          # （result に level が無い場合はルールの既定レベルを使う）
+          filter='.runs[]
+            | ([.tool.driver, (.tool.extensions // [])[]] | map(.rules // [])
+               | add | map({(.id): (.defaultConfiguration.level // "warning")}) | add // {}) as $lv
+            | .results[]? | . + {lv: (.level // $lv[.ruleId] // "warning")}'
+          jq -r "$filter"' | .locations[0].physicalLocation as $loc
+            | "::\(if .lv == "error" then "error" else "warning" end) file=\($loc.artifactLocation.uri),line=\($loc.region.startLine // 1)::[\(.ruleId)] \(.message.text | gsub("\n"; " "))"' \
+            sarif-results/*.sarif
+          errors=$(jq -s "[.[] | $filter | select(.lv == \"error\")] | length" sarif-results/*.sarif)
+          total=$(jq -s "[.[] | $filter] | length" sarif-results/*.sarif)
+          echo "CodeQL 検出: 全 ${total} 件（うち重大 ${errors} 件）"
+          test "$errors" -eq 0

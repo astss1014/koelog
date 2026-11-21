@@ -15,4 +15,6 @@
 - `app.js` : 録音・区切り・保存・画面操作
 - `recorder-worklet.js` : マイク音声の取り出し
 - `worker.js` : 文字起こし（Transformers.js で Whisper を実行）
+- `vendor/` : 同梱ライブラリ（Transformers.js 3.8.1 / ONNX Runtime Web、Apache-2.0）
+- `SECURITY.md` : 安全対策と脆弱性の報告方法
 - `manifest.json` / `icon.svg` / `sw.js` : ホーム画面への追加・オフライン対応
