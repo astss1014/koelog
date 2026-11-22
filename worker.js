@@ -11,6 +11,7 @@ const REVISIONS = {
   'onnx-community/whisper-tiny': 'ff4177021cc41f7db950912b73ea4fdf7d01d8e7',
   'onnx-community/whisper-base': '27a07b4b52b3a4c5886134bb4320e93e1a4bbc7c',
   'onnx-community/whisper-small': '36050c46d777d46dc4b5f43f6d90574fc38f8732',
+  'onnx-community/whisper-large-v3-turbo': '360ebcde2559d60bb474678be3c1de9ef347d01a',
 };
 // クロスオリジン分離されていれば、CPUの複数の計算ラインを使って速くする
 const single = new URL(self.location.href).searchParams.get('t') === '1';
@@ -37,6 +38,9 @@ async function pickDevice() {
 // CPU（WASM）で使う計算の方式。機種によっては 8bit 方式で計算が壊れて「!!!!」になるため、
 // そうなったら次の方式に切り替えてやり直す
 const WASM_DTYPES = ['q8', 'q4'];
+// 最上位版は大きいので、どの環境でも4bit方式だけを使う（約760MB）
+const isLarge = (model) => model.includes('large');
+const dtypesFor = (model) => (isLarge(model) ? ['q4'] : WASM_DTYPES);
 let variant = 0;
 let device = null;
 
@@ -44,9 +48,11 @@ function options(model, dev) {
   return {
     device: dev,
     revision: REVISIONS[model],
-    dtype: dev === 'webgpu'
-      ? { encoder_model: 'fp32', decoder_model_merged: 'q4' }
-      : WASM_DTYPES[variant],
+    dtype: isLarge(model)
+      ? { encoder_model: 'q4', decoder_model_merged: 'q4' }
+      : dev === 'webgpu'
+        ? { encoder_model: 'fp32', decoder_model_merged: 'q4' }
+        : dtypesFor(model)[variant],
     progress_callback: (p) => {
       postMessage({ type: 'progress', status: p.status, file: p.file, loaded: p.loaded, total: p.total });
     },
@@ -60,7 +66,7 @@ function load(model, v = variant) {
   const promise = (async () => {
     if (asr) { try { await asr.dispose(); } catch (_) { /* 解放済み */ } }
     asr = null;
-    variant = Math.min(v, WASM_DTYPES.length - 1);
+    variant = Math.min(v, dtypesFor(model).length - 1);
     device = await pickDevice();
     try {
       asr = await pipeline('automatic-speech-recognition', model, options(model, device));
@@ -96,7 +102,7 @@ async function run(audio) {
 async function transcribe({ id, audio, model, variant: v }) {
   await load(model, v ?? variant);
   let text = await run(audio);
-  while (broken(text) && device === 'wasm' && variant < WASM_DTYPES.length - 1) {
+  while (broken(text) && device === 'wasm' && variant < dtypesFor(model).length - 1) {
     postMessage({ type: 'switching' });
     await load(model, variant + 1);
     text = await run(audio);

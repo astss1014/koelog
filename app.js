@@ -46,7 +46,7 @@ function toStored(r) {
 // ---------- 設定 ----------
 function lsGet(k, d) { try { return localStorage.getItem(k) ?? d; } catch (_) { return d; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) { /* 保存できない環境 */ } }
-const MODELS = ['onnx-community/whisper-tiny', 'onnx-community/whisper-base', 'onnx-community/whisper-small'];
+const MODELS = ['onnx-community/whisper-tiny', 'onnx-community/whisper-base', 'onnx-community/whisper-small', 'onnx-community/whisper-large-v3-turbo'];
 let model = lsGet('koelog.model', DEFAULT_MODEL);
 if (!MODELS.includes(model)) model = DEFAULT_MODEL;
 function lsJson(k, d) { try { const v = JSON.parse(lsGet(k, '')); return v && typeof v === 'object' ? v : d; } catch (_) { return d; } }
@@ -57,7 +57,7 @@ function saveVariant(m, v) { const o = lsJson('koelog.variant', {}); o[m] = v ==
 function markLoaded(m) { const a = loadedModels(); if (!a.includes(m)) { a.push(m); lsSet('koelog.loaded.v2', JSON.stringify(a)); } }
 
 // ---------- 文字起こしAI（Web Worker） ----------
-const APP_VERSION = 9;
+const APP_VERSION = 10;
 // 機種によって計算が壊れるAIがあるため、AIごとに「1スレッドで動かすか」「使えないか」を覚えておく
 const singleFor = (m) => lsJson('koelog.single.v2', {})[m] === 1;
 function setSingle(m) { const o = lsJson('koelog.single.v2', {}); o[m] = 1; lsSet('koelog.single.v2', JSON.stringify(o)); }
@@ -135,7 +135,7 @@ function fallback() {
     const next = MODELS.slice(0, MODELS.indexOf(model)).filter((m) => !unusable().includes(m)).pop();
     if (!next) return false;
     model = next; lsSet('koelog.model', model);
-    toast(`このスマホでは今のAIが動かないため「${next.includes('base') ? '標準' : '軽量'}」に切り替えました`);
+    toast(`この端末では今のAIが動かないため「${modelLabel(next)}」に切り替えました`);
   }
   createWorker();
   ai = { state: 'none', model: null, device: null, error: '' };
@@ -353,6 +353,9 @@ function fmt(sec) { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec
 function fmtDate(t) { const d = new Date(t); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
+function modelLabel(m) {
+  return m.includes('large') ? '最上位' : m.includes('small') ? '高精度' : m.includes('base') ? '標準' : '軽量';
+}
 function errorText(err) {
   if (err === 'broken') return 'AIの計算結果が壊れていました';
   return err;
@@ -418,13 +421,15 @@ function renderDetail(rec) {
   const pending = rec.segments.filter((g) => g.status === 'pending');
   const active = [...jobs.values()].filter((j) => j.rec === rec).length;
   const st = $('#d-status');
-  if (active) { st.hidden = false; st.textContent = `文字起こし中… 残り ${active} 区間`; }
+  if (rec.decoding) { st.hidden = false; st.textContent = '音声を読み込んでいます…'; }
+  else if (active) { st.hidden = false; st.textContent = `文字起こし中… 残り ${active} 区間`; }
   else if (pending.length) { st.hidden = false; st.textContent = '文字起こしが途中で止まっています。「もう一度文字起こし」を押してください。'; }
   else st.hidden = true;
   const nodes = segNodes(rec).map((n) => { if (n.classList.contains('pending') && !active) n.lastChild.textContent = '（未処理）'; return n; });
-  if (!nodes.length) nodes.push(el('p', 'empty', active ? '' : '文字にできる声が見つかりませんでした。'));
+  if (!nodes.length) nodes.push(el('p', 'empty', active || rec.decoding ? '' : '文字にできる声が見つかりませんでした。'));
   $('#d-text').replaceChildren(...nodes);
   $('#btn-redo').disabled = !rec.audio || active > 0;
+  $('#btn-save-audio').disabled = !rec.audio;
 }
 function currentRec() { return open.get(detailId); }
 function toText(rec) {
@@ -436,8 +441,8 @@ async function redo(rec) {
   if (!rec.audio) return;
   for (const [id, j] of jobs) if (j.rec === rec) jobs.delete(id);
   rec.segments = [];
+  rec.decoding = true;
   renderDetail(rec);
-  $('#d-status').hidden = false; $('#d-status').textContent = '音声を読み込んでいます…';
   let buf;
   try {
     const c = new AudioContext({ sampleRate: 16000 });
@@ -446,14 +451,16 @@ async function redo(rec) {
     try {
       const c = new AudioContext();
       try { buf = await c.decodeAudioData(await rec.audio.arrayBuffer()); } finally { c.close(); }
-    } catch (e) { toast('この音声は読み込めませんでした'); renderDetail(rec); return; }
+    } catch (e) { rec.decoding = false; toast('この音声は読み込めませんでした'); renderDetail(rec); return; }
   }
   let mono = buf.getChannelData(0);
   if (buf.numberOfChannels > 1) {
     const r = buf.getChannelData(1); const m = new Float32Array(mono.length);
     for (let i = 0; i < m.length; i++) m[i] = (mono[i] + r[i]) / 2; mono = m;
   }
+  if (!rec.duration) { rec.duration = buf.duration; $('#d-meta').textContent = `${fmtDate(rec.createdAt)} · ${fmt(rec.duration)}`; }
   enqueueAll(rec, mono, buf.sampleRate, 0);
+  rec.decoding = false;
   await dbPut(rec);
   renderDetail(rec);
 }
@@ -528,7 +535,7 @@ $('#btn-settings').onclick = () => {
   for (const o of $('#model').options) {
     const bad = unusable().includes(o.value);
     o.disabled = bad;
-    o.textContent = o.textContent.replace(/（このスマホでは使えません）$/, '') + (bad ? '（このスマホでは使えません）' : '');
+    o.textContent = o.textContent.replace(/（この端末では使えません）$/, '') + (bad ? '（この端末では使えません）' : '');
   }
   $('#model').value = model; renderAi(); show('settings');
 };
@@ -550,13 +557,55 @@ $('#btn-share').onclick = async () => {
   if (navigator.share) { try { await navigator.share({ title: r.title, text: toText(r) }); } catch (_) { /* キャンセル */ } }
   else $('#btn-copy').click();
 };
+function saveFile(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: name.replace(/[\\/:*?"<>|]/g, '_') });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+// ファイル名は日本語だと端末によって「download」になってしまうため、英数字で日時を入れる
+function fileStem(r) {
+  const d = new Date(r.createdAt), z = (n) => String(n).padStart(2, '0');
+  return `koelog_${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}`;
+}
+// 書き出したファイル名（koelog_20261122_0445）から録音日時を読み取る
+function parseStem(name) {
+  const m = /koelog_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/.exec(name);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() : null;
+}
+function audioExt(type) {
+  if (/mp4|m4a|aac/.test(type)) return 'm4a';
+  if (/webm/.test(type)) return 'webm';
+  if (/ogg/.test(type)) return 'ogg';
+  if (/wav/.test(type)) return 'wav';
+  if (/mpeg|mp3/.test(type)) return 'mp3';
+  return 'audio';
+}
 $('#btn-export').onclick = () => {
   const r = currentRec(); if (!r) return;
-  const url = URL.createObjectURL(new Blob([toText(r)], { type: 'text/plain;charset=utf-8' }));
-  const a = Object.assign(document.createElement('a'), { href: url, download: r.title.replace(/[\\/:*?"<>|]/g, '_') + '.txt' });
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  saveFile(new Blob([toText(r)], { type: 'text/plain;charset=utf-8' }), fileStem(r) + '.txt');
   toast('テキストを保存しました');
+};
+// パソコンで清書するために、録音した音声をファイルとして書き出す
+$('#btn-save-audio').onclick = () => {
+  const r = currentRec(); if (!r || !r.audio) return;
+  saveFile(r.audio, `${fileStem(r)}.${audioExt(r.audio.type || r.mime || '')}`);
+  toast('音声を保存しました');
+};
+// スマホで録音した音声などを読み込んで文字起こしする
+$('#btn-import').onclick = () => $('#file').click();
+$('#file').onchange = async (e) => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  if (f.size > 500e6) { toast('ファイルが大きすぎます（500MBまで）'); return; }
+  const when = parseStem(f.name);
+  const rec = { id: Date.now(), title: when ? defaultTitle(new Date(when)) : (f.name.replace(/\.[^.]+$/, '') || defaultTitle()).slice(0, 60),
+    createdAt: when || Date.now(), duration: 0, mime: f.type, audio: f, segments: [], saved: true };
+  open.set(rec.id, rec);
+  await dbPut(rec);
+  await openDetail(rec.id);
+  redo(rec);
 };
 $('#btn-redo').onclick = () => { const r = currentRec(); if (r) redo(r); };
 $('#btn-delete').onclick = async () => {

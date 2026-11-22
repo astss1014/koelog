@@ -40,6 +40,9 @@
       <div class="sub">日本語 · スマホの中で文字起こし</div>
     </div>
 
+    <button class="btn ghost import" id="btn-import" type="button">音声ファイルを読み込んで文字起こし</button>
+    <input id="file" type="file" accept="audio/*,video/*,.m4a,.webm,.mp3,.wav" hidden>
+
     <div class="section-label">録音一覧</div>
     <div class="list" id="list"></div>
     <p class="empty" id="empty">まだ録音がありません。赤いボタンを押すと録音が始まります。</p>
@@ -75,6 +78,7 @@
     </div>
     <div class="actions sub-actions">
       <button class="btn ghost" id="btn-redo" type="button">もう一度文字起こし</button>
+      <button class="btn ghost" id="btn-save-audio" type="button">音声を保存</button>
       <button class="btn ghost danger" id="btn-delete" type="button">削除</button>
     </div>
   </section>
@@ -88,6 +92,7 @@
         <option value="onnx-community/whisper-tiny">軽量（速い・精度は低め／約40MB）</option>
         <option value="onnx-community/whisper-base">標準（おすすめ／約80〜150MB）</option>
         <option value="onnx-community/whisper-small">高精度（重い・新しいスマホ向け／約250〜600MB）</option>
+        <option value="onnx-community/whisper-large-v3-turbo">最上位（パソコン向け・いちばん正確／約760MB）</option>
       </select>
     </label>
     <p class="help">種類を変えると、次の文字起こしの前にそのAIをダウンロードします。サイズは目安です。Wi-Fiでのダウンロードをおすすめします。</p>
