@@ -57,13 +57,19 @@ function saveVariant(m, v) { const o = lsJson('koelog.variant', {}); o[m] = v ==
 function markLoaded(m) { const a = loadedModels(); if (!a.includes(m)) { a.push(m); lsSet('koelog.loaded.v2', JSON.stringify(a)); } }
 
 // ---------- 文字起こしAI（Web Worker） ----------
-const APP_VERSION = 8;
-// 複数スレッドで計算が壊れる機種では、1スレッドに切り替えて覚えておく
-let singleThread = lsGet('koelog.single', '') === '1';
+const APP_VERSION = 9;
+// 機種によって計算が壊れるAIがあるため、AIごとに「1スレッドで動かすか」「使えないか」を覚えておく
+const singleFor = (m) => lsJson('koelog.single.v2', {})[m] === 1;
+function setSingle(m) { const o = lsJson('koelog.single.v2', {}); o[m] = 1; lsSet('koelog.single.v2', JSON.stringify(o)); }
+const unusable = () => { const a = lsJson('koelog.unusable', []); return Array.isArray(a) ? a.filter((m) => MODELS.includes(m)) : []; };
+function markUnusable(m) { const a = unusable(); if (!a.includes(m)) { a.push(m); lsSet('koelog.unusable', JSON.stringify(a)); } }
+if (unusable().includes(model)) model = MODELS.filter((m) => !unusable().includes(m)).pop() || DEFAULT_MODEL;
 let worker = null;
+let workerSingle = false;
 function createWorker() {
   if (worker) worker.terminate();
-  worker = new Worker(`worker.js?v=${APP_VERSION}${singleThread ? '&t=1' : ''}`, { type: 'module' });
+  workerSingle = singleFor(model);
+  worker = new Worker(`worker.js?v=${APP_VERSION}${workerSingle ? '&t=1' : ''}`, { type: 'module' });
   worker.onerror = onWorkerError;
   worker.onmessage = onWorkerMessage;
 }
@@ -73,6 +79,7 @@ const jobs = new Map(); // jobId -> { rec, idx, rms, audio }
 let jobSeq = 0;
 
 function ensureModel() {
+  if (singleFor(model) !== workerSingle) { createWorker(); ai = { state: 'none', model: null, device: null, error: '' }; }
   if ((ai.state === 'ready' || ai.state === 'loading') && ai.model === model) return;
   ai = { state: 'loading', model, device: null, error: '' };
   fileProgress.clear();
@@ -117,24 +124,33 @@ function onWorkerMessage(e) {
 }
 createWorker();
 
-// 1スレッドに切り替えて、まだ終わっていない区間をすべてやり直す
-function fallbackToSingleThread() {
-  singleThread = true;
-  lsSet('koelog.single', '1');
-  toast('この機種に合う計算方式に切り替えています');
+// 計算が壊れたときの切り替え：①1スレッドで動かす → ②それでもだめなら、そのAIは使えないとして1段軽いAIに替える
+// 切り替えたら、まだ終わっていない区間をすべてやり直す
+function fallback() {
+  if (!singleFor(model)) {
+    setSingle(model);
+    toast('この機種に合う計算方式に切り替えています');
+  } else {
+    markUnusable(model);
+    const next = MODELS.slice(0, MODELS.indexOf(model)).filter((m) => !unusable().includes(m)).pop();
+    if (!next) return false;
+    model = next; lsSet('koelog.model', model);
+    toast(`このスマホでは今のAIが動かないため「${next.includes('base') ? '標準' : '軽量'}」に切り替えました`);
+  }
   createWorker();
   ai = { state: 'none', model: null, device: null, error: '' };
   ensureModel();
   for (const [id, j] of jobs) {
     const audio = j.audio.slice();
-    worker.postMessage({ type: 'transcribe', id, audio, model, variant: 0 }, [audio.buffer]);
+    worker.postMessage({ type: 'transcribe', id, audio, model, variant: variantFor(model) }, [audio.buffer]);
   }
+  return true;
 }
 
 function onResult({ id, text, error }) {
   const job = jobs.get(id);
   if (!job) return; // 取り消された処理
-  if (error === 'broken' && !singleThread) { fallbackToSingleThread(); return; }
+  if (error === 'broken' && fallback()) return;
   jobs.delete(id);
   job.rec.segments[job.idx].error = error ? String(error).slice(0, 200) : undefined;
   const seg = job.rec.segments[job.idx];
@@ -508,7 +524,14 @@ $('#btn-rec').onclick = () => startRec().catch((e) => { toast('録音を開始�
 $('#btn-stop').onclick = () => stopRec().catch((e) => { toast('保存に失敗しました'); console.error(e); });
 $('#btn-pause').onclick = () => setPaused(!(session && session.paused));
 $('#btn-load').onclick = () => { ai.state = 'none'; ensureModel(); };
-$('#btn-settings').onclick = () => { $('#model').value = model; renderAi(); show('settings'); };
+$('#btn-settings').onclick = () => {
+  for (const o of $('#model').options) {
+    const bad = unusable().includes(o.value);
+    o.disabled = bad;
+    o.textContent = o.textContent.replace(/（このスマホでは使えません）$/, '') + (bad ? '（このスマホでは使えません）' : '');
+  }
+  $('#model').value = model; renderAi(); show('settings');
+};
 $('#btn-back').onclick = () => { show('home'); renderList(); };
 $('#btn-back2').onclick = () => show('home');
 $('#model').onchange = (e) => {
