@@ -1,12 +1,14 @@
 :root{
   --bg:#FFFFFF; --page:#E9EDF1; --ink:#16202A; --muted:#5E6B78; --line:#D5DCE3;
   --rec:#E5484D; --rec-soft:#FDE8E8; --tx:#0F6E68; --tx-soft:#E2F2F0;
+  --s0:#0F6E68; --s1:#B4441F; --s2:#5B4BC4; --s3:#8A6A00;
   --f-body:"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic UI",system-ui,sans-serif;
   --f-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
 }
 @media (prefers-color-scheme: dark){:root{
   --bg:#18212A; --page:#0F151B; --ink:#E7ECF1; --muted:#93A1AE; --line:#2A3541;
-  --rec:#FF6369; --rec-soft:#3A1E22; --tx:#5CC8BE; --tx-soft:#15302E; color-scheme:dark}}
+  --rec:#FF6369; --rec-soft:#3A1E22; --tx:#5CC8BE; --tx-soft:#15302E;
+  --s0:#5CC8BE; --s1:#F0906B; --s2:#A99BFF; --s3:#E0BE52; color-scheme:dark}}
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--page);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.6;-webkit-tap-highlight-color:transparent}
@@ -89,3 +91,9 @@ select{font:inherit;font-weight:400;padding:10px;border-radius:10px;border:1px s
 .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:var(--bg);font-size:13px;padding:8px 16px;border-radius:20px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;z-index:10}
 .toast.show{opacity:1}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+.who{font-family:var(--f-body);font-size:11px;font-weight:700;margin-left:4px}
+.who.s0{color:var(--s0)} .who.s1{color:var(--s1)} .who.s2{color:var(--s2)} .who.s3{color:var(--s3)}
+.check{display:flex;gap:8px;align-items:center;font-weight:700;font-size:14px;margin-top:14px}
+.check input{width:18px;height:18px;accent-color:var(--tx)}
+.tips{margin:4px 0 0;padding-left:20px}
+.sub-actions .btn{font-size:12px;padding-inline:2px}

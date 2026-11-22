@@ -11,7 +11,7 @@
 | 音声を外に送らない | 録音・文字起こし・保存はすべて端末のブラウザ内で行う。サーバーへ音声やテキストを送る処理はない |
 | 通信先の制限（CSP） | 画面と文字起こし担当（Worker）の両方で、通信先をこのサイトと AI の配布元（huggingface.co / *.hf.co）だけに制限。外部サイトのプログラムは読み込めない |
 | ライブラリの同梱 | 文字起こしライブラリ（Transformers.js 3.8.1 と ONNX Runtime Web）を `vendor/` に同梱し、CDN から実行時に読み込まない。npm 公開版と同一であることを SHA-256 で確認済み（下表） |
-| AI の版の固定 | 使う AI は4種類（tiny / base / small / large-v3-turbo）だけに限定し、Hugging Face 上の版（コミット）を固定。配布元で中身が差し替わっても自動では使われない |
+| AI の版の固定 | 使う AI は文字起こし4種類（tiny / base / small / large-v3-turbo）と話者の区別1種類（pyannote-segmentation-3.0）だけに限定し、Hugging Face 上の版（コミット）を固定。配布元で中身が差し替わっても自動では使われない |
 | 画面の書き換え対策 | 録音タイトルや文字起こし結果は `textContent` で表示し、HTML として解釈しない |
 | その他のヘッダー | `X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、クロスオリジン分離（COOP/COEP）を Service Worker で付与 |
 | 保存データ | 録音と結果はそのブラウザの IndexedDB にだけ保存。ブラウザに消去しないよう依頼（`navigator.storage.persist()`） |

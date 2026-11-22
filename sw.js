@@ -1,5 +1,5 @@
 // アプリ本体と文字起こしの部品を保存して、オフラインでも開けるようにする
-const VERSION = 10;
+const VERSION = 11;
 const CACHE_NAME = 'koelog-v' + VERSION;
 const ASSETS = ['./', './index.html', './style.css', './app.js', './worker.js', './recorder-worklet.js', './manifest.json', './icon.svg',
   './vendor/transformers.min.js', './vendor/ort-wasm-simd-threaded.jsep.mjs', './vendor/ort-wasm-simd-threaded.jsep.wasm'];

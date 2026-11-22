@@ -40,7 +40,8 @@ const dbDel = (id) => dbTx('readwrite', (s) => s.delete(id));
 const dbAll = () => dbTx('readonly', (s) => s.getAll());
 function toStored(r) {
   return { id: r.id, title: r.title, createdAt: r.createdAt, duration: r.duration,
-    mime: r.mime, audio: r.audio, segments: r.segments.map((g) => ({ ...g })) };
+    mime: r.mime, audio: r.audio, segments: r.segments.map((g) => ({ ...g })),
+    turns: r.turns || null, wantSpeakers: !!r.wantSpeakers };
 }
 
 // ---------- 設定 ----------
@@ -56,8 +57,12 @@ const variantFor = (m) => (lsJson('koelog.variant', {})[m] === 1 ? 1 : 0);
 function saveVariant(m, v) { const o = lsJson('koelog.variant', {}); o[m] = v === 1 ? 1 : 0; lsSet('koelog.variant', JSON.stringify(o)); }
 function markLoaded(m) { const a = loadedModels(); if (!a.includes(m)) { a.push(m); lsSet('koelog.loaded.v2', JSON.stringify(a)); } }
 
+// 録音だけモード／話者を分ける（設定画面で切り替え）
+let recordOnly = lsGet('koelog.recordOnly', '') === '1';
+let diarizeOn = lsGet('koelog.diarize', '') === '1';
+
 // ---------- 文字起こしAI（Web Worker） ----------
-const APP_VERSION = 10;
+const APP_VERSION = 11;
 // 機種によって計算が壊れるAIがあるため、AIごとに「1スレッドで動かすか」「使えないか」を覚えておく
 const singleFor = (m) => lsJson('koelog.single.v2', {})[m] === 1;
 function setSingle(m) { const o = lsJson('koelog.single.v2', {}); o[m] = 1; lsSet('koelog.single.v2', JSON.stringify(o)); }
@@ -120,8 +125,18 @@ function onWorkerMessage(e) {
     renderAi();
   } else if (m.type === 'result') {
     onResult(m);
+  } else if (m.type === 'diarized') {
+    const rec = diaJobs.get(m.id);
+    if (!rec) return;
+    diaJobs.delete(m.id);
+    rec.diarizing = false;
+    rec.turns = m.turns;
+    if (m.error) toast('話者を分けられませんでした');
+    if (rec.saved) dbPut(rec);
+    refreshRecord(rec);
   }
 }
+const diaJobs = new Map(); // jobId -> rec（話者の区別）
 createWorker();
 
 // 計算が壊れたときの切り替え：①1スレッドで動かす → ②それでもだめなら、そのAIは使えないとして1段軽いAIに替える
@@ -142,12 +157,12 @@ function fallback() {
   ensureModel();
   for (const [id, j] of jobs) {
     const audio = j.audio.slice();
-    worker.postMessage({ type: 'transcribe', id, audio, model, variant: variantFor(model) }, [audio.buffer]);
+    worker.postMessage({ type: 'transcribe', id, audio, model, variant: variantFor(model), timestamps: j.timestamps }, [audio.buffer]);
   }
   return true;
 }
 
-function onResult({ id, text, error }) {
+function onResult({ id, text, error, chunks }) {
   const job = jobs.get(id);
   if (!job) return; // 取り消された処理
   if (error === 'broken' && fallback()) return;
@@ -158,6 +173,7 @@ function onResult({ id, text, error }) {
   // 静かな区間で出やすい決まり文句を取り除く
   if (job.rms < 0.02 && /^(ご視聴ありがとうございました|ありがとうございました|字幕.*)[。.!！]?$/.test(t)) t = '';
   seg.text = t;
+  seg.parts = t && chunks ? chunks.map((c) => ({ start: seg.start + c.start, end: seg.start + c.end, text: c.text })) : undefined;
   seg.status = error ? 'failed' : (t ? 'done' : 'silent');
   if (job.rec.saved) dbPut(job.rec);
   refreshRecord(job.rec);
@@ -204,9 +220,10 @@ function enqueue(rec, pcm, sr, start, end) {
   rec.segments.push({ start, end, text: '', status: silent ? 'silent' : 'pending' });
   if (!silent) {
     const id = ++jobSeq;
-    jobs.set(id, { rec, idx, rms: level, audio: audio.slice() });
+    const timestamps = !!rec.wantSpeakers;
+    jobs.set(id, { rec, idx, rms: level, audio: audio.slice(), timestamps });
     ensureModel();
-    worker.postMessage({ type: 'transcribe', id, audio, model, variant: variantFor(model) }, [audio.buffer]);
+    worker.postMessage({ type: 'transcribe', id, audio, model, variant: variantFor(model), timestamps }, [audio.buffer]);
   }
 }
 // 長い音声を、言葉の切れ目で区切りながら順番に文字起こしへ回す
@@ -279,7 +296,7 @@ async function startRec() {
   $('#live').replaceChildren();
   setPaused(false);
   show('rec');
-  ensureModel();
+  if (!recordOnly) ensureModel();
   renderLive();
   drawWave();
 }
@@ -288,6 +305,7 @@ function onPcm(block) {
   const s = session; if (!s) return;
   s.levels.shift(); s.levels.push(s.paused ? 0 : rms(block));
   if (s.paused) return;
+  if (recordOnly) { s.cut += block.length; return; } // 録音だけモードでは文字起こし用の音声をためない
   s.pcm.push(block); s.pcmLen += block.length;
   if (s.pcmLen >= segRange()[1] * s.sr) cutSegment(false);
 }
@@ -377,7 +395,8 @@ function renderLive() {
   const live = $('#live');
   const nodes = segNodes(session.rec, true);
   nodes.push(el('div', 'seg pending'));
-  nodes[nodes.length - 1].append(el('span', 'body', ai.state === 'loading' ? 'AIを準備しています…（録音は続いています）' : '聞き取り中…'));
+  nodes[nodes.length - 1].append(el('span', 'body', recordOnly ? '録音だけモード：文字起こしは録音のあとで行います'
+    : ai.state === 'loading' ? 'AIを準備しています…（録音は続いています）' : '聞き取り中…'));
   live.replaceChildren(...nodes);
   live.scrollTop = live.scrollHeight;
 }
@@ -422,17 +441,71 @@ function renderDetail(rec) {
   const active = [...jobs.values()].filter((j) => j.rec === rec).length;
   const st = $('#d-status');
   if (rec.decoding) { st.hidden = false; st.textContent = '音声を読み込んでいます…'; }
+  else if (active && rec.diarizing) { st.hidden = false; st.textContent = `文字起こし中… 残り ${active} 区間（話者の区別もしています）`; }
+  else if (rec.diarizing) { st.hidden = false; st.textContent = '話者を分けています…'; }
   else if (active) { st.hidden = false; st.textContent = `文字起こし中… 残り ${active} 区間`; }
   else if (pending.length) { st.hidden = false; st.textContent = '文字起こしが途中で止まっています。「もう一度文字起こし」を押してください。'; }
   else st.hidden = true;
-  const nodes = segNodes(rec).map((n) => { if (n.classList.contains('pending') && !active) n.lastChild.textContent = '（未処理）'; return n; });
-  if (!nodes.length) nodes.push(el('p', 'empty', active || rec.decoding ? '' : '文字にできる声が見つかりませんでした。'));
+  const nodes = rec.turns && !active ? speakerNodes(rec)
+    : segNodes(rec).map((n) => { if (n.classList.contains('pending') && !active) n.lastChild.textContent = '（未処理）'; return n; });
+  const untouched = !rec.segments.length && !active && !rec.decoding;
+  if (!nodes.length) nodes.push(el('p', 'empty', active || rec.decoding ? '' : untouched && rec.audio ? 'まだ文字起こししていません。下の「文字起こしする」を押してください。' : '文字にできる声が見つかりませんでした。'));
   $('#d-text').replaceChildren(...nodes);
+  $('#btn-redo').textContent = untouched ? '文字起こしする' : 'もう一度文字起こし';
   $('#btn-redo').disabled = !rec.audio || active > 0;
   $('#btn-save-audio').disabled = !rec.audio;
 }
 function currentRec() { return open.get(detailId); }
+
+// ---------- 話者の割り当て ----------
+// 文ごとに、いちばん長く重なっている話者を選ぶ（重ならなければ時刻が近い話者）
+function speakerOf(part, turns) {
+  const tot = {};
+  for (const t of turns) {
+    const v = Math.min(part.end, t.end) - Math.max(part.start, t.start);
+    if (v > 0) tot[t.spk] = (tot[t.spk] || 0) + v;
+  }
+  let best = null, bv = 0;
+  for (const [k, v] of Object.entries(tot)) if (v > bv) { bv = v; best = Number(k); }
+  if (best !== null) return best;
+  let bd = Infinity;
+  for (const t of turns) {
+    const d = Math.min(Math.abs(t.start - part.end), Math.abs(part.start - t.end));
+    if (d < bd) { bd = d; best = t.spk; }
+  }
+  return best;
+}
+// 同じ話者が続く文はまとめ、登場順に「話者1」「話者2」…と番号を振る
+function utterances(rec) {
+  const parts = [];
+  for (const g of rec.segments) {
+    if (g.status !== 'done') continue;
+    if (g.parts && g.parts.length) parts.push(...g.parts); else parts.push({ start: g.start, end: g.end, text: g.text });
+  }
+  const order = new Map(), out = [];
+  for (const p of parts) {
+    const s = rec.turns.length ? speakerOf(p, rec.turns) : null;
+    if (s !== null && !order.has(s)) order.set(s, order.size + 1);
+    const n = s === null ? 0 : order.get(s);
+    const last = out[out.length - 1];
+    if (last && last.n === n) { last.text += p.text; last.end = p.end; } else out.push({ n, start: p.start, end: p.end, text: p.text });
+  }
+  return out;
+}
+function speakerNodes(rec) {
+  return utterances(rec).map((u) => {
+    const box = el('div', 'seg done');
+    const head = el('span', 'ts', fmt(u.start) + ' ');
+    if (u.n) head.append(el('span', 'who s' + ((u.n - 1) % 4), '話者' + u.n));
+    box.append(head, el('span', 'body', u.text));
+    return box;
+  });
+}
 function toText(rec) {
+  if (rec.turns) {
+    const lines = utterances(rec).map((u) => `[${fmt(u.start)}] ${u.n ? '話者' + u.n + '：' : ''}${u.text}`);
+    return `${rec.title}\n${fmtDate(rec.createdAt)}（${fmt(rec.duration)}）\n\n${lines.join('\n')}\n`;
+  }
   const lines = rec.segments.filter((g) => g.status === 'done').map((g) => `[${fmt(g.start)}] ${g.text}`);
   return `${rec.title}\n${fmtDate(rec.createdAt)}（${fmt(rec.duration)}）\n\n${lines.join('\n')}\n`;
 }
@@ -441,6 +514,10 @@ async function redo(rec) {
   if (!rec.audio) return;
   for (const [id, j] of jobs) if (j.rec === rec) jobs.delete(id);
   rec.segments = [];
+  rec.turns = null;
+  rec.wantSpeakers = diarizeOn;
+  for (const [id, r] of diaJobs) if (r === rec) diaJobs.delete(id);
+  rec.diarizing = false;
   rec.decoding = true;
   renderDetail(rec);
   let buf;
@@ -459,6 +536,13 @@ async function redo(rec) {
     for (let i = 0; i < m.length; i++) m[i] = (mono[i] + r[i]) / 2; mono = m;
   }
   if (!rec.duration) { rec.duration = buf.duration; $('#d-meta').textContent = `${fmtDate(rec.createdAt)} · ${fmt(rec.duration)}`; }
+  if (rec.wantSpeakers) {
+    const id = ++jobSeq;
+    diaJobs.set(id, rec);
+    rec.diarizing = true;
+    const a16 = resample(mono, buf.sampleRate);
+    worker.postMessage({ type: 'diarize', id, audio: a16 }, [a16.buffer]);
+  }
   enqueueAll(rec, mono, buf.sampleRate, 0);
   rec.decoding = false;
   await dbPut(rec);
@@ -531,7 +615,11 @@ $('#btn-rec').onclick = () => startRec().catch((e) => { toast('録音を開始�
 $('#btn-stop').onclick = () => stopRec().catch((e) => { toast('保存に失敗しました'); console.error(e); });
 $('#btn-pause').onclick = () => setPaused(!(session && session.paused));
 $('#btn-load').onclick = () => { ai.state = 'none'; ensureModel(); };
+$('#opt-record-only').onchange = (e) => { recordOnly = e.target.checked; lsSet('koelog.recordOnly', recordOnly ? '1' : ''); };
+$('#opt-diarize').onchange = (e) => { diarizeOn = e.target.checked; lsSet('koelog.diarize', diarizeOn ? '1' : ''); };
 $('#btn-settings').onclick = () => {
+  $('#opt-record-only').checked = recordOnly;
+  $('#opt-diarize').checked = diarizeOn;
   for (const o of $('#model').options) {
     const bad = unusable().includes(o.value);
     o.disabled = bad;
